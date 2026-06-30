@@ -1,0 +1,8 @@
+{
+  "name": "metaapi-test",
+  "version": "1.0.0",
+  "main": "test_metaapi.js",
+  "dependencies": {
+    "metaapi.cloud-sdk": "^29.3.1"
+  }
+}

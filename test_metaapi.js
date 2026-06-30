@@ -81,7 +81,7 @@ async function main() {
   console.log('Waiting for synchronization...');
   await connection.waitSynchronized();
 
-  // KNOWN ISSUE we hit on a previous run: waitConnected()/waitSynchronized()
+  // KNOWN ISSUE we hit on the previous run: waitConnected()/waitSynchronized()
   // can resolve before MetaApi's backend has genuinely finished settling the
   // broker connection internally, causing "account is not connected to broker
   // yet" even though every wait* call already returned successfully. This is
@@ -122,7 +122,12 @@ async function main() {
 
   if (!SYMBOL) {
     // Common gold symbol naming conventions across different MT5 brokers
-    const commonVariants = ['XAUUSD', 'GOLD', 'XAUUSD.', 'XAUUSDm', 'GOLD.', 'XAU/USD', 'Gold'];
+    // CONFIRMED via direct lookup in PrimaCapital's MT5 Market Watch:
+    // every symbol on this broker has a trailing dash suffix (USDJPY-,
+    // AUDUSD-, XAGUSD-, BTCUSD-, etc). Gold is XAUUSD- specifically.
+    // Trying that first, with the old guesses kept as fallback in case
+    // this ever runs against a different broker/account in the future.
+    const commonVariants = ['XAUUSD-', 'XAUUSD', 'GOLD', 'XAUUSD.', 'XAUUSDm', 'GOLD.', 'XAU/USD', 'Gold'];
     for (const variant of commonVariants) {
       try {
         console.log(`Trying symbol variant: ${variant}`);

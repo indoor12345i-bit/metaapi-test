@@ -64,8 +64,12 @@ async function main() {
     console.log('Found existing account:', account.id);
   }
 
-  console.log('Deploying account (this can take a minute the first time)...');
-  await account.deploy();
+  if (account.state !== 'DEPLOYED' && account.state !== 'DEPLOYING') {
+    console.log('Deploying account (this can take a minute the first time)...');
+    await account.deploy();
+  } else {
+    console.log(`Account already in state: ${account.state}, skipping redundant deploy call`);
+  }
 
   console.log('Waiting for connection to broker...');
   await account.waitConnected();
@@ -77,8 +81,44 @@ async function main() {
   console.log('Waiting for synchronization...');
   await connection.waitSynchronized();
 
+  // KNOWN ISSUE we hit on the previous run: waitConnected()/waitSynchronized()
+  // can resolve before MetaApi's backend has genuinely finished settling the
+  // broker connection internally, causing "account is not connected to broker
+  // yet" even though every wait* call already returned successfully. This is
+  // a documented-but-not-obvious timing gap on MetaApi's side, not something
+  // wrong with the sequence of calls itself (which matches their docs).
+  //
+  // Fix: a short settling delay, then retry the subscription a few times
+  // with increasing waits if it fails with that specific timeout error.
+  console.log('Allowing 10s settling time before subscribing (known MetaApi timing gap)...');
+  await new Promise(resolve => setTimeout(resolve, 10000));
+
   console.log('Subscribing to XAUUSD market data...');
-  await connection.subscribeToMarketData('XAUUSD');
+  let subscribed = false;
+  let lastError = null;
+  const maxAttempts = 5;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await connection.subscribeToMarketData('XAUUSD');
+      subscribed = true;
+      console.log(`✅ Subscription succeeded on attempt ${attempt}`);
+      break;
+    } catch (err) {
+      lastError = err;
+      const waitSeconds = attempt * 10; // 10s, 20s, 30s, 40s, 50s
+      console.log(`Subscription attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      if (attempt < maxAttempts) {
+        console.log(`Waiting ${waitSeconds}s before retry...`);
+        await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+      }
+    }
+  }
+
+  if (!subscribed) {
+    console.error(`❌ Subscription failed after ${maxAttempts} attempts. Last error:`, lastError.message);
+    throw lastError;
+  }
 
   console.log('\n✅ Connected! Fetching live XAUUSD price...\n');
   const price = connection.terminalState.price('XAUUSD');

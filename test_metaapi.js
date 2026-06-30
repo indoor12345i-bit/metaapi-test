@@ -17,22 +17,49 @@ async function main() {
   console.log('Connecting to MetaApi...');
   const api = new MetaApi(TOKEN);
 
-  console.log('Checking for existing account or creating new one...');
-  const accounts = await api.metatraderAccountApi.getAccounts();
+  console.log('Looking for existing account or creating new one...');
+  // getAccounts() was removed in a breaking SDK change - replaced with
+  // getAccountsWithInfiniteScrollPagination(). Using that here instead.
+  const accounts = await api.metatraderAccountApi.getAccountsWithInfiniteScrollPagination();
   let account = accounts.find(a => a.login === LOGIN && a.server === SERVER);
 
   if (!account) {
     console.log('No existing account found, creating new one...');
-    account = await api.metatraderAccountApi.createAccount({
-      name: 'Vitrax Gold Price Feed',
-      type: 'cloud',
-      login: LOGIN,
-      password: PASSWORD,
-      server: SERVER,
-      platform: 'mt5',
-      magic: 0,
-    });
-    console.log('Account created:', account.id);
+    try {
+      account = await api.metatraderAccountApi.createAccount({
+        name: 'Vitrax Gold Price Feed',
+        type: 'cloud',
+        login: LOGIN,
+        password: PASSWORD,
+        server: SERVER,
+        platform: 'mt5',
+        magic: 0,
+      });
+      console.log('Account created:', account.id);
+    } catch (err) {
+      // These are MetaApi's documented error codes - surfacing them clearly
+      // instead of letting a generic crash hide what actually went wrong.
+      if (err.details) {
+        const code = err.details.code || err.details;
+        if (code === 'E_SRV_NOT_FOUND') {
+          console.error('❌ SERVER NAME NOT RECOGNIZED:', SERVER);
+          console.error('MetaApi could not find a server file matching this name.');
+          if (err.details.serversByBrokers) {
+            console.error('Similar server names MetaApi knows about:', JSON.stringify(err.details.serversByBrokers, null, 2));
+          }
+        } else if (code === 'E_AUTH') {
+          console.error('❌ AUTHENTICATION FAILED - login/password/server combination was rejected by the broker.');
+          console.error('Double check: login =', LOGIN, '| server =', SERVER, '| password is the investor password, correctly active.');
+        } else if (code === 'E_SERVER_TIMEZONE') {
+          console.error('❌ MetaApi could not detect broker settings automatically. This can be temporary - try again in a minute.');
+        } else if (code === 'E_RESOURCE_SLOTS') {
+          console.error('❌ This account needs more resource slots than the default. Recommended:', err.details.recommendedResourceSlots);
+        } else {
+          console.error('❌ Unrecognized error code:', code, '- full details:', JSON.stringify(err.details, null, 2));
+        }
+      }
+      throw err;
+    }
   } else {
     console.log('Found existing account:', account.id);
   }

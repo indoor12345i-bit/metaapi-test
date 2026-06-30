@@ -81,7 +81,7 @@ async function main() {
   console.log('Waiting for synchronization...');
   await connection.waitSynchronized();
 
-  // KNOWN ISSUE we hit on the previous run: waitConnected()/waitSynchronized()
+  // KNOWN ISSUE we hit on a previous run: waitConnected()/waitSynchronized()
   // can resolve before MetaApi's backend has genuinely finished settling the
   // broker connection internally, causing "account is not connected to broker
   // yet" even though every wait* call already returned successfully. This is
@@ -93,36 +93,92 @@ async function main() {
   console.log('Allowing 10s settling time before subscribing (known MetaApi timing gap)...');
   await new Promise(resolve => setTimeout(resolve, 10000));
 
-  console.log('Subscribing to XAUUSD market data...');
-  let subscribed = false;
-  let lastError = null;
-  const maxAttempts = 5;
+  // The exact symbol name for gold varies by broker (XAUUSD, GOLD, XAUUSD.,
+  // XAUUSDm, etc). Try a lookup of all available symbols first; if that
+  // fails (some SDK versions may require an existing subscription before
+  // getSymbols works), fall back to trying a list of common gold symbol
+  // name variants directly.
+  console.log('Looking up available symbols to find PrimaCapital\'s gold symbol name...');
+  let SYMBOL = null;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await connection.subscribeToMarketData('XAUUSD');
-      subscribed = true;
-      console.log(`✅ Subscription succeeded on attempt ${attempt}`);
-      break;
-    } catch (err) {
-      lastError = err;
-      const waitSeconds = attempt * 10; // 10s, 20s, 30s, 40s, 50s
-      console.log(`Subscription attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
-      if (attempt < maxAttempts) {
-        console.log(`Waiting ${waitSeconds}s before retry...`);
-        await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+  try {
+    const allSymbols = await connection.getSymbols();
+    console.log(`Total symbols available: ${allSymbols.length}`);
+    const goldCandidates = allSymbols.filter(s =>
+      s.toUpperCase().includes('XAU') || s.toUpperCase().includes('GOLD')
+    );
+    console.log('Gold-related symbols found:', JSON.stringify(goldCandidates));
+    if (goldCandidates.length > 0) {
+      SYMBOL = goldCandidates[0];
+    } else {
+      console.log('First 30 symbols for reference:', JSON.stringify(allSymbols.slice(0, 30)));
+    }
+  } catch (err) {
+    console.log('getSymbols() lookup failed (this can happen before any subscription exists):', err.message);
+    console.log('Falling back to trying common gold symbol name variants directly...');
+  }
+
+  let alreadySubscribed = false;
+
+  if (!SYMBOL) {
+    // Common gold symbol naming conventions across different MT5 brokers
+    const commonVariants = ['XAUUSD', 'GOLD', 'XAUUSD.', 'XAUUSDm', 'GOLD.', 'XAU/USD', 'Gold'];
+    for (const variant of commonVariants) {
+      try {
+        console.log(`Trying symbol variant: ${variant}`);
+        await connection.subscribeToMarketData(variant);
+        SYMBOL = variant;
+        alreadySubscribed = true;
+        console.log(`✅ Found working symbol: ${variant}`);
+        break;
+      } catch (err) {
+        console.log(`  "${variant}" failed: ${err.message}`);
       }
     }
   }
 
-  if (!subscribed) {
-    console.error(`❌ Subscription failed after ${maxAttempts} attempts. Last error:`, lastError.message);
-    throw lastError;
+  if (!SYMBOL) {
+    console.error('❌ Could not find a working gold symbol name through any method.');
+    console.error('PrimaCapital may use a non-obvious naming convention - manual lookup in MT5 terminal needed.');
+    throw new Error('No working gold symbol found');
   }
 
-  console.log('\n✅ Connected! Fetching live XAUUSD price...\n');
-  const price = connection.terminalState.price('XAUUSD');
-  console.log('Real-time price from PrimaCapital via MT5:');
+  console.log(`Using symbol: ${SYMBOL}`);
+
+  let subscribed = alreadySubscribed;
+  if (!alreadySubscribed) {
+    console.log('Subscribing to market data...');
+    let lastError = null;
+    const maxAttempts = 5;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await connection.subscribeToMarketData(SYMBOL);
+        subscribed = true;
+        console.log(`✅ Subscription succeeded on attempt ${attempt}`);
+        break;
+      } catch (err) {
+        lastError = err;
+        const waitSeconds = attempt * 10;
+        console.log(`Subscription attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+        if (attempt < maxAttempts) {
+          console.log(`Waiting ${waitSeconds}s before retry...`);
+          await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+        }
+      }
+    }
+
+    if (!subscribed) {
+      console.error(`❌ Subscription failed after ${maxAttempts} attempts. Last error:`, lastError.message);
+      throw lastError;
+    }
+  } else {
+    console.log('Already subscribed via fallback variant lookup, skipping redundant retry block.');
+  }
+
+  console.log('\n✅ Connected! Fetching live price...\n');
+  const price = connection.terminalState.price(SYMBOL);
+  console.log(`Real-time price for ${SYMBOL} from PrimaCapital via MT5:`);
   console.log(JSON.stringify(price, null, 2));
 
   console.log('\nDone. Disconnecting...');
